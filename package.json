@@ -1,0 +1,19 @@
+{
+  "name": "pnld-func2",
+  "version": "1.0.0",
+  "description": "Azure Function para gerar SAS de blobs",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "func start",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.11.2",
+    "@azure/msal-node": "^5.0.6",
+    "@azure/storage-blob": "^12.18.0",
+    "axios": "^1.13.6",
+    "exceljs": "^4.4.0",
+    "node-fetch": "^3.3.2",
+    "pdfkit": "^0.17.2"
+  }
+}
