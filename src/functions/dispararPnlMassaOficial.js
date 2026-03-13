@@ -40,7 +40,8 @@ app.http("dispararPnlMassaOficial", {
 
             // 2. BUSCA PDF (ANEXO)
             context.log("📄 Gerando PDF...");
-            const urlGeradorPdf = "https://pnld-func-gvdcaca2brccggdg.brazilsouth-01.azurewebsites.net/api/gerarCadernoQuestoes?code=fY8AhX4dNvdvpv66RRvoGWogmazIEBSlZkibgow09OfJAzFuJPtE4Q==";
+            const funcKey = process.env.GERADOR_PDF_KEY;
+            const urlGeradorPdf = `https://pnld-func-gvdcaca2brccggdg.brazilsouth-01.azurewebsites.net/api/gerarCadernoQuestoes?code=${funcKey}`;
             const resPdf = await axios.post(urlGeradorPdf, { formularioId });
             const { fileName, fileContent, contentType } = resPdf.data;
 
