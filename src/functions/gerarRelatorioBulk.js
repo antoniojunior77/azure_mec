@@ -62,11 +62,21 @@ app.http("gerarRelatorioExcelPNLD", {
             // 2. BUSCA DE DADOS EM PARALELO
             const queryRespostas = "crb55_crd_respostaentes?$select=crb55_respostasjson,crb55_token,crb55_status,crb55_cargo_acao,crb55_cpf_acao,crb55_email_acao,crb55_nome_acao";
             
-            const [resForm, listaRespostas, listaUsuarios] = await Promise.all([
+            const [resForm, listaRespostasRaw, listaUsuariosRaw] = await Promise.all([
                 api.get(`crb55_crd_formularios(${formularioId})?$select=crb55_perguntasjson`),
                 buscarTudo(api, queryRespostas),
                 buscarTudo(api, "crb55_tb_usuarioses?$select=crb55_tipo_de_entidade,crb55_municipio_secretaria,crb55_uf_secretaria,crb55_token")
             ]);
+
+            // ✨ FILTRAGEM DOS TOKENS BETA
+            const listaRespostas = listaRespostasRaw.filter(r => 
+                r.crb55_token && !r.crb55_token.toUpperCase().startsWith("BETA")
+            );
+
+            const listaUsuarios = listaUsuariosRaw.filter(u => 
+                u.crb55_token && !u.crb55_token.toUpperCase().startsWith("BETA")
+            );
+
 
             const estruturaMestre = JSON.parse(resForm.data.crb55_perguntasjson);
             const mapaRespostas = new Map(listaRespostas.map(r => [r.crb55_token, r]));
