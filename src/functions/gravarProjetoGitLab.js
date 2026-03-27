@@ -149,7 +149,37 @@ app.http('gravarProjetoGitLab', {
         context.log(`[GRAVAR] Label criada: "${f.Title}" spId=${item.id} → gitlabId=${label.id}`);
       }
 
-      // PASSOS 4-9 serão adicionados aqui
+      // PASSO 4: Obter board padrão do projeto
+      context.log('[GRAVAR] Passo 4: Obtendo board padrão');
+      const boardsRes = await gitlabRequest(`/projects/${projectId}/boards`);
+      if (!boardsRes.ok) {
+        const err = await boardsRes.text();
+        throw { step: 'Obtenção do board padrão', gitlabError: err };
+      }
+      const gitlabBoards = await boardsRes.json();
+      const boardId = gitlabBoards[0].id;
+      context.log(`[GRAVAR] Board padrão: id=${boardId}`);
+
+      // PASSO 5: Criar colunas no board (apenas labels com ColunaBoard = "Sim")
+      context.log('[GRAVAR] Passo 5: Criando colunas no board');
+      const boardLabels = spLabels.filter(item => item.fields.ColunaBoard === 'Sim');
+      context.log(`[GRAVAR] ${boardLabels.length} labels marcadas como coluna de board`);
+      for (const item of boardLabels) {
+        const boardEntry = spBoards.find(b => String(b.fields.ID_LABEL) === String(item.id));
+        const posicao = boardEntry ? Number(boardEntry.fields.Posicao) : 0;
+        const gitlabLabelId = spLabelIdToGitlabId[item.id];
+        const listRes = await gitlabRequest(`/projects/${projectId}/boards/${boardId}/lists`, {
+          method: 'POST',
+          body: JSON.stringify({ label_id: gitlabLabelId, position: posicao }),
+        });
+        if (!listRes.ok) {
+          const err = await listRes.text();
+          throw { step: `Criação da coluna "${item.fields.Title}"`, gitlabError: err };
+        }
+        context.log(`[GRAVAR] Coluna criada: "${item.fields.Title}" posição=${posicao}`);
+      }
+
+      // PASSOS 6-9 serão adicionados aqui
 
       return {
         status: 200,
