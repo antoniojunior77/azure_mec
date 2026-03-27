@@ -14,3 +14,4 @@ require("./functions/gerarCadernoQuestoes");
 require("./functions/dispararPnlMassaOficial");
 require("./functions/testeRastreio");
 require("./functions/getAcessGitLab");
+require("./functions/gravarProjetoGitLab");
