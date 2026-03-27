@@ -118,7 +118,38 @@ app.http('gravarProjetoGitLab', {
       projectUrl = project.web_url;
       context.log(`[GRAVAR] Projeto criado: id=${projectId} url=${projectUrl}`);
 
-      // PASSOS 2-9 serão adicionados aqui
+      // PASSO 2: Buscar dados do SharePoint em paralelo
+      context.log('[GRAVAR] Passo 2: Buscando dados do SharePoint');
+      const graphToken = await getGraphToken();
+      const [spLabels, spBoards] = await Promise.all([
+        fetchSpList(graphToken, process.env.SP_LIST_LABELS_ID),
+        fetchSpList(graphToken, process.env.SP_LIST_BOARDS_ID),
+      ]);
+      context.log(`[GRAVAR] SharePoint: ${spLabels.length} labels, ${spBoards.length} boards`);
+
+      // PASSO 3: Criar cada label no GitLab
+      context.log(`[GRAVAR] Passo 3: Criando ${spLabels.length} labels no GitLab`);
+      const spLabelIdToGitlabId = {};
+      for (const item of spLabels) {
+        const f = item.fields;
+        const labelRes = await gitlabRequest(`/projects/${projectId}/labels`, {
+          method: 'POST',
+          body: JSON.stringify({
+            name: f.Title,
+            color: f.Cor,
+            description: f.Descricao || '',
+          }),
+        });
+        if (!labelRes.ok) {
+          const err = await labelRes.text();
+          throw { step: `Criação da label "${f.Title}"`, gitlabError: err };
+        }
+        const label = await labelRes.json();
+        spLabelIdToGitlabId[item.id] = label.id;
+        context.log(`[GRAVAR] Label criada: "${f.Title}" spId=${item.id} → gitlabId=${label.id}`);
+      }
+
+      // PASSOS 4-9 serão adicionados aqui
 
       return {
         status: 200,
