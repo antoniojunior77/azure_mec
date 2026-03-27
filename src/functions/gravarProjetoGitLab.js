@@ -179,7 +179,37 @@ app.http('gravarProjetoGitLab', {
         context.log(`[GRAVAR] Coluna criada: "${item.fields.Title}" posição=${posicao}`);
       }
 
-      // PASSOS 6-9 serão adicionados aqui
+      // PASSO 6: Buscar userId pelo email
+      context.log(`[GRAVAR] Passo 6: Buscando usuário "${email_responsavel}"`);
+      const usersRes = await gitlabRequest(`/users?search=${encodeURIComponent(email_responsavel)}`);
+      if (!usersRes.ok) {
+        const err = await usersRes.text();
+        throw { step: 'Busca de usuário no GitLab', gitlabError: err };
+      }
+      const users = await usersRes.json();
+      let userId;
+      if (users.length > 0) {
+        userId = users[0].id;
+        context.log(`[GRAVAR] Usuário encontrado: id=${userId}`);
+      } else {
+        userId = SERVICE_ACCOUNT_ID;
+        usuarioNaoEncontrado = true;
+        context.log(`[GRAVAR] Usuário "${email_responsavel}" não encontrado. Usando fallback id=${SERVICE_ACCOUNT_ID}`);
+      }
+
+      // PASSO 7: Adicionar owner ao projeto
+      context.log(`[GRAVAR] Passo 7: Adicionando owner userId=${userId}`);
+      const memberRes = await gitlabRequest(`/projects/${projectId}/members`, {
+        method: 'POST',
+        body: JSON.stringify({ user_id: userId, access_level: 50 }),
+      });
+      if (!memberRes.ok) {
+        const err = await memberRes.text();
+        throw { step: 'Adição de owner ao projeto', gitlabError: err };
+      }
+      context.log(`[GRAVAR] Owner adicionado: userId=${userId}`);
+
+      // PASSOS 8-9 serão adicionados aqui
 
       return {
         status: 200,
