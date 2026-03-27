@@ -209,12 +209,42 @@ app.http('gravarProjetoGitLab', {
       }
       context.log(`[GRAVAR] Owner adicionado: userId=${userId}`);
 
-      // PASSOS 8-9 serão adicionados aqui
+      // PASSO 8: Registrar projeto na lista SharePoint Projects
+      context.log('[GRAVAR] Passo 8: Registrando na lista Projects do SharePoint');
+      const spProjectRes = await fetch(
+        `https://graph.microsoft.com/v1.0/sites/${process.env.SHAREPOINT_SITE_ID}/lists/${process.env.SP_LIST_PROJECTS_ID}/items`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${graphToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            fields: {
+              Title: name,
+              ID_PROJETO: String(projectId),
+              url: projectUrl,
+              token: process.env.GITLAB_TOKEN,
+            },
+          }),
+        }
+      );
+      if (!spProjectRes.ok) {
+        const err = await spProjectRes.text();
+        throw { step: 'Registro na lista Projects do SharePoint', gitlabError: err };
+      }
+      context.log('[GRAVAR] Projeto registrado na lista Projects do SharePoint');
 
+      // PASSO 9: Montar e retornar resposta final
+      const responseBody = { projectId, projectUrl };
+      if (usuarioNaoEncontrado) {
+        responseBody.aviso = `Projeto criado com sucesso, porém o usuário '${email_responsavel}' não foi encontrado no GitLab. A conta 'sharepoint-automation' foi adicionada como owner temporário.`;
+      }
+      context.log(`[GRAVAR] Concluído com sucesso: projectId=${projectId}`);
       return {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        jsonBody: { projectId, projectUrl },
+        jsonBody: responseBody,
       };
 
     } catch (err) {
