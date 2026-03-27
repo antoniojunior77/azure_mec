@@ -50,12 +50,20 @@ async function fetchSpList(graphToken, listId) {
   return data.value;
 }
 
-// Helper: rollback — deleta projeto GitLab silenciosamente
-async function rollback(projectId) {
+// Helper: rollback — deleta projeto GitLab e retorna se teve sucesso
+async function rollback(projectId, context) {
   try {
-    await gitlabRequest(`/projects/${projectId}`, { method: 'DELETE' });
-  } catch {
-    // ignora erros de rollback
+    const res = await gitlabRequest(`/projects/${projectId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const body = await res.text();
+      context.log(`[GRAVAR] AVISO: rollback falhou (status ${res.status}): ${body}`);
+      return false;
+    }
+    context.log(`[GRAVAR] Rollback OK: projeto ${projectId} removido`);
+    return true;
+  } catch (e) {
+    context.log(`[GRAVAR] AVISO: rollback erro de rede: ${e.message}`);
+    return false;
   }
 }
 
@@ -101,22 +109,43 @@ app.http('gravarProjetoGitLab', {
     let projectId = null;
     let projectUrl = null;
     let usuarioNaoEncontrado = false;
+    let projectCreatedInThisRun = false;
 
     try {
-      // PASSO 1: Criar projeto GitLab
+      // PASSO 1: Criar projeto GitLab (idempotente)
       context.log('[GRAVAR] Passo 1: Criando projeto GitLab');
       const projectRes = await gitlabRequest('/projects', {
         method: 'POST',
         body: JSON.stringify({ name, path, namespace_id, description, visibility, initialize_with_readme }),
       });
       if (!projectRes.ok) {
-        const err = await projectRes.text();
-        throw { step: 'Criação do projeto GitLab', gitlabError: err };
+        const errBody = await projectRes.text();
+        let errJson;
+        try { errJson = JSON.parse(errBody); } catch { errJson = null; }
+        const isConflict = errJson?.message &&
+          JSON.stringify(errJson.message).includes('has already been taken');
+        if (isConflict) {
+          context.log(`[GRAVAR] Projeto já existe. Buscando projeto existente (namespace_id=${namespace_id}, path="${path}")...`);
+          const nsRes = await gitlabRequest(`/namespaces/${namespace_id}`);
+          if (!nsRes.ok) throw { step: 'Busca do namespace GitLab', gitlabError: await nsRes.text() };
+          const ns = await nsRes.json();
+          const projectPath = encodeURIComponent(`${ns.full_path}/${path}`);
+          const existingRes = await gitlabRequest(`/projects/${projectPath}`);
+          if (!existingRes.ok) throw { step: 'Busca do projeto existente no GitLab', gitlabError: await existingRes.text() };
+          const existing = await existingRes.json();
+          projectId = existing.id;
+          projectUrl = existing.web_url;
+          context.log(`[GRAVAR] Projeto existente encontrado: id=${projectId}. Continuando fluxo...`);
+        } else {
+          throw { step: 'Criação do projeto GitLab', gitlabError: errBody };
+        }
+      } else {
+        const project = await projectRes.json();
+        projectId = project.id;
+        projectUrl = project.web_url;
+        projectCreatedInThisRun = true;
+        context.log(`[GRAVAR] Projeto criado: id=${projectId} url=${projectUrl}`);
       }
-      const project = await projectRes.json();
-      projectId = project.id;
-      projectUrl = project.web_url;
-      context.log(`[GRAVAR] Projeto criado: id=${projectId} url=${projectUrl}`);
 
       // PASSO 2: Buscar dados do SharePoint em paralelo
       context.log('[GRAVAR] Passo 2: Buscando dados do SharePoint');
@@ -127,18 +156,24 @@ app.http('gravarProjetoGitLab', {
       ]);
       context.log(`[GRAVAR] SharePoint: ${spLabels.length} labels, ${spBoards.length} boards`);
 
-      // PASSO 3: Criar cada label no GitLab
+      // PASSO 3: Criar labels no GitLab (idempotente — busca existentes para montar o mapa)
       context.log(`[GRAVAR] Passo 3: Criando ${spLabels.length} labels no GitLab`);
+      const existingLabelsRes = await gitlabRequest(`/projects/${projectId}/labels?per_page=100`);
+      if (!existingLabelsRes.ok) throw { step: 'Busca de labels existentes', gitlabError: await existingLabelsRes.text() };
+      const existingLabels = await existingLabelsRes.json();
+      const existingLabelByName = Object.fromEntries(existingLabels.map(l => [l.name, l.id]));
+
       const spLabelIdToGitlabId = {};
       for (const item of spLabels) {
         const f = item.fields;
+        if (existingLabelByName[f.Title] !== undefined) {
+          spLabelIdToGitlabId[item.id] = existingLabelByName[f.Title];
+          context.log(`[GRAVAR] Label já existe: "${f.Title}" gitlabId=${existingLabelByName[f.Title]} — ignorando`);
+          continue;
+        }
         const labelRes = await gitlabRequest(`/projects/${projectId}/labels`, {
           method: 'POST',
-          body: JSON.stringify({
-            name: f.Title,
-            color: f.Cor,
-            description: f.Descricao || '',
-          }),
+          body: JSON.stringify({ name: f.Title, color: f.Cor, description: f.Descricao || '' }),
         });
         if (!labelRes.ok) {
           const err = await labelRes.text();
@@ -152,40 +187,47 @@ app.http('gravarProjetoGitLab', {
       // PASSO 4: Obter board padrão do projeto
       context.log('[GRAVAR] Passo 4: Obtendo board padrão');
       const boardsRes = await gitlabRequest(`/projects/${projectId}/boards`);
-      if (!boardsRes.ok) {
-        const err = await boardsRes.text();
-        throw { step: 'Obtenção do board padrão', gitlabError: err };
-      }
+      if (!boardsRes.ok) throw { step: 'Obtenção do board padrão', gitlabError: await boardsRes.text() };
       const gitlabBoards = await boardsRes.json();
-      const boardId = gitlabBoards[0].id;
-      context.log(`[GRAVAR] Board padrão: id=${boardId}`);
+      const boardId = gitlabBoards && gitlabBoards.length > 0 ? gitlabBoards[0].id : null;
+      context.log(boardId ? `[GRAVAR] Board padrão: id=${boardId}` : '[GRAVAR] Nenhum board encontrado — pulando configuração de colunas');
 
-      // PASSO 5: Criar colunas no board (apenas labels com ColunaBoard = "Sim")
+      // PASSO 5: Criar colunas no board (idempotente — pula se não há board)
       context.log('[GRAVAR] Passo 5: Criando colunas no board');
-      const boardLabels = spLabels.filter(item => item.fields.ColunaBoard === 'Sim');
-      context.log(`[GRAVAR] ${boardLabels.length} labels marcadas como coluna de board`);
-      for (const item of boardLabels) {
-        const boardEntry = spBoards.find(b => String(b.fields.ID_LABEL) === String(item.id));
-        const posicao = boardEntry ? Number(boardEntry.fields.Posicao) : 0;
-        const gitlabLabelId = spLabelIdToGitlabId[item.id];
-        const listRes = await gitlabRequest(`/projects/${projectId}/boards/${boardId}/lists`, {
-          method: 'POST',
-          body: JSON.stringify({ label_id: gitlabLabelId, position: posicao }),
-        });
-        if (!listRes.ok) {
-          const err = await listRes.text();
-          throw { step: `Criação da coluna "${item.fields.Title}"`, gitlabError: err };
+      if (!boardId) {
+        context.log('[GRAVAR] Passo 5: sem board disponível — ignorando colunas');
+      } else {
+        const existingListsRes = await gitlabRequest(`/projects/${projectId}/boards/${boardId}/lists`);
+        if (!existingListsRes.ok) throw { step: 'Busca de colunas existentes no board', gitlabError: await existingListsRes.text() };
+        const existingLists = await existingListsRes.json();
+        const existingListLabelIds = new Set(existingLists.map(l => l.label?.id).filter(Boolean));
+
+        const boardLabels = spLabels.filter(item => item.fields.ColunaBoard === 'Sim');
+        context.log(`[GRAVAR] ${boardLabels.length} labels marcadas como coluna de board`);
+        for (const item of boardLabels) {
+          const gitlabLabelId = spLabelIdToGitlabId[item.id];
+          if (existingListLabelIds.has(gitlabLabelId)) {
+            context.log(`[GRAVAR] Coluna já existe: "${item.fields.Title}" — ignorando`);
+            continue;
+          }
+          const boardEntry = spBoards.find(b => String(b.fields.ID_LABEL) === String(item.id));
+          const posicao = boardEntry ? Number(boardEntry.fields.Posicao) : 0;
+          const listRes = await gitlabRequest(`/projects/${projectId}/boards/${boardId}/lists`, {
+            method: 'POST',
+            body: JSON.stringify({ label_id: gitlabLabelId, position: posicao }),
+          });
+          if (!listRes.ok) {
+            const err = await listRes.text();
+            throw { step: `Criação da coluna "${item.fields.Title}"`, gitlabError: err };
+          }
+          context.log(`[GRAVAR] Coluna criada: "${item.fields.Title}" posição=${posicao}`);
         }
-        context.log(`[GRAVAR] Coluna criada: "${item.fields.Title}" posição=${posicao}`);
       }
 
       // PASSO 6: Buscar userId pelo email
       context.log(`[GRAVAR] Passo 6: Buscando usuário "${email_responsavel}"`);
       const usersRes = await gitlabRequest(`/users?search=${encodeURIComponent(email_responsavel)}`);
-      if (!usersRes.ok) {
-        const err = await usersRes.text();
-        throw { step: 'Busca de usuário no GitLab', gitlabError: err };
-      }
+      if (!usersRes.ok) throw { step: 'Busca de usuário no GitLab', gitlabError: await usersRes.text() };
       const users = await usersRes.json();
       let userId;
       if (users.length > 0) {
@@ -197,43 +239,43 @@ app.http('gravarProjetoGitLab', {
         context.log(`[GRAVAR] Usuário "${email_responsavel}" não encontrado. Usando fallback id=${SERVICE_ACCOUNT_ID}`);
       }
 
-      // PASSO 7: Adicionar owner ao projeto
+      // PASSO 7: Adicionar owner ao projeto (idempotente — ignora se já é membro)
       context.log(`[GRAVAR] Passo 7: Adicionando owner userId=${userId}`);
       const memberRes = await gitlabRequest(`/projects/${projectId}/members`, {
         method: 'POST',
         body: JSON.stringify({ user_id: userId, access_level: 50 }),
       });
       if (!memberRes.ok) {
-        const err = await memberRes.text();
-        throw { step: 'Adição de owner ao projeto', gitlabError: err };
+        const memberErr = await memberRes.text();
+        const alreadyMember = memberErr.includes('already') || memberErr.includes('Member');
+        if (!alreadyMember) throw { step: 'Adição de owner ao projeto', gitlabError: memberErr };
+        context.log(`[GRAVAR] Usuário userId=${userId} já é membro — ignorando`);
+      } else {
+        context.log(`[GRAVAR] Owner adicionado: userId=${userId}`);
       }
-      context.log(`[GRAVAR] Owner adicionado: userId=${userId}`);
 
-      // PASSO 8: Registrar projeto na lista SharePoint Projects
+      // PASSO 8: Registrar projeto na lista SharePoint Projects (idempotente — verifica se já existe)
       context.log('[GRAVAR] Passo 8: Registrando na lista Projects do SharePoint');
-      const spProjectRes = await fetch(
-        `https://graph.microsoft.com/v1.0/sites/${process.env.SHAREPOINT_SITE_ID}/lists/${process.env.SP_LIST_PROJECTS_ID}/items`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${graphToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            fields: {
-              Title: name,
-              ID_PROJETO: String(projectId),
-              url: projectUrl,
-              token: process.env.GITLAB_TOKEN,
-            },
-          }),
-        }
-      );
-      if (!spProjectRes.ok) {
-        const err = await spProjectRes.text();
-        throw { step: 'Registro na lista Projects do SharePoint', gitlabError: err };
+      const spCheckUrl = `https://graph.microsoft.com/v1.0/sites/${process.env.SHAREPOINT_SITE_ID}/lists/${process.env.SP_LIST_PROJECTS_ID}/items?$filter=fields/ID_PROJETO eq '${projectId}'&expand=fields`;
+      const spCheckRes = await fetch(spCheckUrl, { headers: { Authorization: `Bearer ${graphToken}` } });
+      if (!spCheckRes.ok) throw { step: 'Verificação de projeto no SharePoint', gitlabError: await spCheckRes.text() };
+      const spCheckData = await spCheckRes.json();
+      if (spCheckData.value && spCheckData.value.length > 0) {
+        context.log('[GRAVAR] Projeto já registrado no SharePoint — ignorando');
+      } else {
+        const spProjectRes = await fetch(
+          `https://graph.microsoft.com/v1.0/sites/${process.env.SHAREPOINT_SITE_ID}/lists/${process.env.SP_LIST_PROJECTS_ID}/items`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${graphToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fields: { Title: name, ID_PROJETO: String(projectId), url: projectUrl, token: process.env.GITLAB_TOKEN },
+            }),
+          }
+        );
+        if (!spProjectRes.ok) throw { step: 'Registro na lista Projects do SharePoint', gitlabError: await spProjectRes.text() };
+        context.log('[GRAVAR] Projeto registrado na lista Projects do SharePoint');
       }
-      context.log('[GRAVAR] Projeto registrado na lista Projects do SharePoint');
 
       // PASSO 9: Montar e retornar resposta final
       const responseBody = { projectId, projectUrl };
@@ -252,18 +294,22 @@ app.http('gravarProjetoGitLab', {
       const gitlabError = err.gitlabError || err.message || String(err);
       context.log(`[GRAVAR] ERRO na etapa "${step}": ${gitlabError}`);
 
-      if (projectId) {
+      let rollbackOk = false;
+      if (projectId && projectCreatedInThisRun) {
         context.log(`[GRAVAR] Rollback: deletando projeto id=${projectId}`);
-        await rollback(projectId);
+        rollbackOk = await rollback(projectId, context);
       }
+
+      const mensagem_usuario = projectId && projectCreatedInThisRun
+        ? rollbackOk
+          ? `Não foi possível concluir o projeto na etapa "${step}". O projeto GitLab foi removido automaticamente.`
+          : `Não foi possível concluir o projeto na etapa "${step}". ATENÇÃO: o projeto GitLab (id=${projectId}) NÃO foi removido automaticamente — delete manualmente antes de tentar novamente.`
+        : `Erro na etapa "${step}".`;
 
       return {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        jsonBody: {
-          error: gitlabError,
-          mensagem_usuario: `Não foi possível criar o projeto na etapa "${step}". O projeto GitLab foi removido.`,
-        },
+        jsonBody: { error: gitlabError, mensagem_usuario },
       };
     }
   },
