@@ -98,11 +98,52 @@ app.http('gravarProjetoGitLab', {
       };
     }
 
-    // TODO: implementação nos próximos passos
-    return {
-      status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      jsonBody: { ok: true },
-    };
+    let projectId = null;
+    let projectUrl = null;
+    let usuarioNaoEncontrado = false;
+
+    try {
+      // PASSO 1: Criar projeto GitLab
+      context.log('[GRAVAR] Passo 1: Criando projeto GitLab');
+      const projectRes = await gitlabRequest('/projects', {
+        method: 'POST',
+        body: JSON.stringify({ name, path, namespace_id, description, visibility, initialize_with_readme }),
+      });
+      if (!projectRes.ok) {
+        const err = await projectRes.text();
+        throw { step: 'Criação do projeto GitLab', gitlabError: err };
+      }
+      const project = await projectRes.json();
+      projectId = project.id;
+      projectUrl = project.web_url;
+      context.log(`[GRAVAR] Projeto criado: id=${projectId} url=${projectUrl}`);
+
+      // PASSOS 2-9 serão adicionados aqui
+
+      return {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        jsonBody: { projectId, projectUrl },
+      };
+
+    } catch (err) {
+      const step = err.step || 'desconhecida';
+      const gitlabError = err.gitlabError || err.message || String(err);
+      context.log(`[GRAVAR] ERRO na etapa "${step}": ${gitlabError}`);
+
+      if (projectId) {
+        context.log(`[GRAVAR] Rollback: deletando projeto id=${projectId}`);
+        await rollback(projectId);
+      }
+
+      return {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        jsonBody: {
+          error: gitlabError,
+          mensagem_usuario: `Não foi possível criar o projeto na etapa "${step}". O projeto GitLab foi removido.`,
+        },
+      };
+    }
   },
 });
