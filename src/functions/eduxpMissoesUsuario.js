@@ -12,8 +12,8 @@ const { dataverseRequest } = require("../shared/dataverseClient");
 const TABLE_MISSAO_USUARIO = "eduxp_missaousuarios";
 const TABLE_USUARIO        = "eduxp_usuarios";
 const TABLE_MISSAO         = "eduxp_missaos";
-const TABLE_ATIVIDADE      = "eduxp_atividadess";
-const TABLE_TIPO_ATIVIDADE = "eduxp_tipoatividadess";
+const TABLE_ATIVIDADE      = "eduxp_atividades";
+const TABLE_TIPO_ATIVIDADE = "eduxp_tipoatividades";
 
 const NAV_USUARIO = "eduxp_UsuarioID";
 const NAV_MISSAO  = "eduxp_MissaoID";

@@ -12,9 +12,9 @@ const { dataverseRequest } = require("../shared/dataverseClient");
 const TABLE_TREINAMENTO_USUARIO = "eduxp_treinamentousuarios";
 const TABLE_USUARIO             = "eduxp_usuarios";
 const TABLE_TREINAMENTO         = "eduxp_treinamentos";
-const TABLE_ATIVIDADE           = "eduxp_atividadess";
-const TABLE_TIPO_ATIVIDADE      = "eduxp_tipoatividadess";
-const TABLE_TRANSACAO_MOEDAS    = process.env.TABLE_TRANSACAO_MOEDAS || "eduxp_transacaomoedass";
+const TABLE_ATIVIDADE           = "eduxp_atividades";
+const TABLE_TIPO_ATIVIDADE      = "eduxp_tipoatividades";
+const TABLE_TRANSACAO_MOEDAS    = process.env.TABLE_TRANSACAO_MOEDAS || "eduxp_transacaomoedas";
 
 const ATIV = {
   DESCR: "eduxp_descricao",
