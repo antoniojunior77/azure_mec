@@ -656,7 +656,7 @@ async function handleDiariasGerar(request, context) {
   const userGuid = normGuid(usuarioId);
 
   const templates = await listRecords(TABLE_MISSAO, {
-    select: "eduxp_missaoid,eduxp_titulo",
+    select: "eduxp_missaoid,eduxp_titulo,eduxp_xprecompensa,eduxp_moedasrecompensa,eduxp_totalobjetivos,_eduxp_conquistarecompensaid_value",
     filter: `eduxp_tipomissao eq ${TIPO_MISSAO.Diaria}`,
     top: 5000
   });
@@ -675,23 +675,61 @@ async function handleDiariasGerar(request, context) {
   const existSet = new Set((existing?.value || []).map(x => String(x["_eduxp_missaoid_value"] || "").toLowerCase()));
 
   let created = 0;
+  let autoCompletadas = 0;
+  let xpTotal = 0;
+  let moedasTotal = 0;
+
   for (const m of dailyTemplates) {
     const midLower = String(m.eduxp_missaoid || "").toLowerCase();
     if (!midLower || existSet.has(midLower)) continue;
 
-    await createRecord(TABLE_MISSAO_USUARIO, {
-      [COL.OBJ]: 0,
-      [COL.PERC]: 0,
-      [COL.STATUS]: STATUS.PENDENTE,
+    // Missões com totalobjetivos = 0 (ou null) são auto-completadas no login
+    const totalObjetivos = Number(m.eduxp_totalobjetivos ?? 1);
+    const autoCompletar = totalObjetivos === 0;
+
+    const vinculo = await createRecord(TABLE_MISSAO_USUARIO, {
+      [COL.OBJ]: autoCompletar ? 1 : 0,
+      [COL.PERC]: autoCompletar ? 100 : 0,
+      [COL.STATUS]: autoCompletar ? STATUS.CONCLUIDA : STATUS.PENDENTE,
       [DAILY.DATAREF]: dataRef,
-      [DAILY.RESGATADA]: false,
+      [DAILY.RESGATADA]: autoCompletar,
+      ...(autoCompletar ? { [DAILY.DATARESGATE]: new Date().toISOString() } : {}),
       [`${NAV_USUARIO}@odata.bind`]: `/${TABLE_USUARIO}(${userGuid})`,
       [`${NAV_MISSAO}@odata.bind`]: `/${TABLE_MISSAO}(${normGuid(m.eduxp_missaoid)})`
-    });
+    }, { idField: COL.ID, returnRepresentation: true });
     created++;
+
+    if (autoCompletar) {
+      const xp = Number(m.eduxp_xprecompensa ?? 0);
+      const moedas = Number(m.eduxp_moedasrecompensa ?? 0);
+      if (xp > 0 || moedas > 0) {
+        const token = `MU:${vinculo.id}`;
+        const jaReg = await atividadeJaRegistrada(userGuid, token);
+        if (!jaReg) {
+          await creditarUsuario(userGuid, xp, moedas);
+          await criarAtividade({
+            usuarioId: userGuid,
+            tipoNome: "ConclusaoMissaoDiaria",
+            descricao: `Missão diária auto-concluída: ${m.eduxp_titulo} (+${xp} XP, +${moedas} moedas)`,
+            xp, moedas, token
+          });
+          xpTotal += xp;
+          moedasTotal += moedas;
+        }
+      }
+      if (m._eduxp_conquistarecompensaid_value) {
+        await ensureConquistaUsuario(userGuid, m._eduxp_conquistarecompensaid_value).catch(() => {});
+      }
+      autoCompletadas++;
+    }
   }
 
-  return { status: 200, headers: CORS, jsonBody: { message: "Missões diárias geradas com sucesso.", dataRef, created, resolvedVia } };
+  return {
+    status: 200, headers: CORS, jsonBody: {
+      message: "Missões diárias geradas com sucesso.",
+      dataRef, created, autoCompletadas, xpTotal, moedasTotal, resolvedVia
+    }
+  };
 }
 
 async function handleDiariasClaim(request, context, vinculoId) {
