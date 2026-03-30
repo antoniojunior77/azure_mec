@@ -210,21 +210,22 @@ async function handleGet(request, context) {
     }
   }
 
-  // 2) Foto do Office 365 via Graph
+  // 2) Foto do Office 365 via Graph (retorna como data URL base64)
   const userEmail = email || user?.[COL_EMAIL] || null;
   if (userEmail) {
     const photoBuffer = await fetchGraphPhoto(userEmail);
     if (photoBuffer) {
+      const b64 = photoBuffer.toString("base64");
       return {
         status: 200,
-        headers: { ...CORS, "Content-Type": "image/jpeg" },
-        body: photoBuffer
+        headers: CORS,
+        jsonBody: { source: "office365", url: `data:image/jpeg;base64,${b64}` }
       };
     }
   }
 
   // 3) Sem foto
-  return { status: 404, headers: CORS, jsonBody: { error: "Foto não encontrada." } };
+  return { status: 200, headers: CORS, jsonBody: { source: "none", url: null } };
 }
 
 // PUT — faz upload da imagem e salva URL permanente no Dataverse
