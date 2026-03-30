@@ -76,7 +76,10 @@ app.http('getAcessGitLab', {
       url += `?${params.toString()}`;
     }
 
-    context.log(`GitLab proxy → ${method} ${url}`);
+    context.log(`[KANBAN] ${method} ${url}`);
+    if (['POST', 'PUT'].includes(method) && requestBody) {
+      context.log(`[KANBAN] body → ${JSON.stringify(requestBody)}`);
+    }
 
     // Chama o GitLab
     const fetchOptions = {
@@ -93,6 +96,7 @@ app.http('getAcessGitLab', {
     }
 
     const gitlabRes = await fetch(url, fetchOptions);
+    context.log(`[KANBAN] GitLab status: ${gitlabRes.status}`);
 
     // DELETE 204 não tem body
     if (gitlabRes.status === 204) {
@@ -111,12 +115,17 @@ app.http('getAcessGitLab', {
     }
 
     if (!gitlabRes.ok) {
-      context.log(`GitLab error ${gitlabRes.status}: ${responseText}`);
+      context.log(`[KANBAN] GitLab error ${gitlabRes.status}: ${responseText.substring(0, 500)}`);
       return {
         status: gitlabRes.status,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         jsonBody: responseBody
       };
+    }
+
+    // Log resumido para PUT (atualização de issue)
+    if (method === 'PUT' && responseBody && responseBody.iid) {
+      context.log(`[KANBAN] PUT issue #${responseBody.iid} → labels: ${JSON.stringify(responseBody.labels)}`);
     }
 
     return {

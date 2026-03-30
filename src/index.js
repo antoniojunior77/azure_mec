@@ -15,3 +15,22 @@ require("./functions/dispararPnlMassaOficial");
 require("./functions/testeRastreio");
 require("./functions/getAcessGitLab");
 require("./functions/gravarProjetoGitLab");
+
+// EduXP functions
+require("./functions/eduxpUsuarios");
+require("./functions/eduxpConsultarUsuarios");
+require("./functions/eduxpFornecedores");
+require("./functions/eduxpTipoAtividade");
+require("./functions/eduxpAtividades");
+require("./functions/eduxpMissoes");
+require("./functions/eduxpMissoesUsuario");
+require("./functions/eduxpConquistas");
+require("./functions/eduxpConquistasUsuario");
+require("./functions/eduxpClassificacoes");
+require("./functions/eduxpClassificacoesUsuario");
+require("./functions/eduxpTreinamentos");
+require("./functions/eduxpTreinamentosUsuario");
+require("./functions/eduxpProjetos");
+require("./functions/eduxpProjetosUsuario");
+require("./functions/eduxpTransacaoMoedas");
+require("./functions/eduxpPerformance");

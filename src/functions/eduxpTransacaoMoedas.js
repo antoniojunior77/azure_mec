@@ -24,7 +24,7 @@ const COL = {
   LK_USUARIO_VAL: "_eduxp_usuarioid_value"
 };
 
-const NAV_USUARIO = "eduxp_UsuarioID";
+const NAV_USUARIO = "eduxp_usuarioid";
 
 const CORS = { "Access-Control-Allow-Origin": "*" };
 

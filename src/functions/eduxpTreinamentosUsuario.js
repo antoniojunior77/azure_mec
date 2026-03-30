@@ -25,8 +25,8 @@ const ATIV = {
 };
 
 const ATIV_NAV = {
-  USUARIO: "eduxp_UsuarioID",
-  TIPO: "eduxp_TipoAtividadeID"
+  USUARIO: "eduxp_usuarioid",
+  TIPO: "eduxp_tipoatividadeid"
 };
 
 const COL = {
@@ -55,8 +55,8 @@ const USR = {
   MOEDAS: "eduxp_moedas"
 };
 
-const NAV_USUARIO    = "eduxp_UsuarioID";
-const NAV_TREINAMENTO = "eduxp_TreinamentoID";
+const NAV_USUARIO    = "eduxp_usuarioid";
+const NAV_TREINAMENTO = "eduxp_treinamentoid";
 
 const TX = {
   DATA: "eduxp_datatransacao",
@@ -67,7 +67,7 @@ const TX = {
   DESCRICAO: "eduxp_descricao",
   ORIGEM_ID: "eduxp_origemid",
   ORIGEM_TIPO: "eduxp_origemtipo",
-  NAV_USUARIO: "eduxp_UsuarioID"
+  NAV_USUARIO: "eduxp_usuarioid"
 };
 
 const TX_TIPO = { CREDITO: 1, DEBITO: 2 };

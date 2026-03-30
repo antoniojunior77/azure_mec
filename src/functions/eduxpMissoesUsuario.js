@@ -15,8 +15,8 @@ const TABLE_MISSAO         = "eduxp_missaos";
 const TABLE_ATIVIDADE      = "eduxp_atividades";
 const TABLE_TIPO_ATIVIDADE = "eduxp_tipoatividades";
 
-const NAV_USUARIO = "eduxp_UsuarioID";
-const NAV_MISSAO  = "eduxp_MissaoID";
+const NAV_USUARIO = "eduxp_usuarioid";
+const NAV_MISSAO  = "eduxp_missaoid";
 
 const ATIV = {
   ID: "eduxp_atividadeid",
@@ -28,8 +28,8 @@ const ATIV = {
 };
 
 const ATIV_NAV = {
-  USUARIO: "eduxp_UsuarioID",
-  TIPO: "eduxp_TipoAtividadeID"
+  USUARIO: "eduxp_usuarioid",
+  TIPO: "eduxp_tipoatividadeid"
 };
 
 const TIPO_MISSAO = {
@@ -256,6 +256,16 @@ app.http("eduxp-missoesUsuario", {
         return { status: 405, headers: CORS, jsonBody: { error: "Método/ação não suportado em diarias" } };
       }
 
+      // GET /eduxp/missoesUsuario/usuario/list/{usuarioId}
+      if (scope === "usuario" && action === "list" && idFromRoute) {
+        if (method === "GET") return await handleGet(request, context, idFromRoute);
+      }
+
+      // POST /eduxp/missoesUsuario/sincronizar
+      if (scope === "sincronizar" && method === "POST") {
+        return await handleSincronizar(request, context);
+      }
+
       if (method === "GET")    return await handleGet(request, context);
       if (method === "POST")   return await handlePost(request, context);
       if (method === "PUT")    return await handlePut(request, context);
@@ -269,9 +279,9 @@ app.http("eduxp-missoesUsuario", {
   }
 });
 
-async function handleGet(request, context) {
+async function handleGet(request, context, usuarioIdOverride = "") {
   const id = (request.query.get("id") || "").trim();
-  const usuarioIdParam = (request.query.get("usuarioId") || "").trim();
+  const usuarioIdParam = usuarioIdOverride || (request.query.get("usuarioId") || "").trim();
   const emailParam = (request.query.get("email") || "").trim();
   const missaoId = (request.query.get("missaoId") || "").trim();
   const statusParam = (request.query.get("status") || "").trim();
@@ -778,6 +788,85 @@ async function handleDiariasExpirar(request, context) {
     status: 200, headers: CORS, jsonBody: {
       message: dryRun ? "DryRun: nada foi atualizado" : "Missões expiradas com sucesso",
       ateData, found: toExpireIds.length, expired, dryRun
+    }
+  };
+}
+
+async function handleSincronizar(request, context) {
+  // Busca todas as missões (exceto diárias — essas são geradas por agendamento)
+  const missoesRes = await listRecords(TABLE_MISSAO, {
+    select: "eduxp_missaoid,eduxp_tipomissao",
+    filter: `eduxp_tipomissao ne ${TIPO_MISSAO.Diaria}`,
+    top: 500
+  });
+  const missoes = missoesRes?.value || [];
+
+  // Busca todos os usuários ativos
+  const usuariosRes = await listRecords(TABLE_USUARIO, {
+    select: "eduxp_usuarioid",
+    filter: "statecode eq 0",
+    top: 5000
+  });
+  const usuarios = usuariosRes?.value || [];
+
+  if (!missoes.length || !usuarios.length) {
+    return { status: 200, headers: CORS, jsonBody: { message: "Nada para sincronizar.", missoes: missoes.length, usuarios: usuarios.length, criados: 0, ignorados: 0 } };
+  }
+
+  // Busca todos os vínculos existentes (para evitar duplicatas)
+  const vinculosRes = await listRecords(TABLE_MISSAO_USUARIO, {
+    select: `${COL.LK_USUARIO_VAL},${COL.LK_MISSAO_VAL}`,
+    top: 5000
+  });
+  const existSet = new Set(
+    (vinculosRes?.value || []).map(v =>
+      `${normGuid(v[COL.LK_USUARIO_VAL])}:${normGuid(v[COL.LK_MISSAO_VAL])}`
+    )
+  );
+
+  let criados = 0;
+  let ignorados = 0;
+  const erroDetalhes = [];
+
+  for (const m of missoes) {
+    const missaoGuid = normGuid(m.eduxp_missaoid);
+    if (!missaoGuid) continue;
+
+    for (const u of usuarios) {
+      const usuarioGuid = normGuid(u.eduxp_usuarioid);
+      if (!usuarioGuid) continue;
+
+      const chave = `${usuarioGuid}:${missaoGuid}`;
+      if (existSet.has(chave)) { ignorados++; continue; }
+
+      try {
+        await createRecord(TABLE_MISSAO_USUARIO, {
+          [COL.OBJ]: 0,
+          [COL.PERC]: 0,
+          [COL.STATUS]: STATUS.PENDENTE,
+          [DAILY.RESGATADA]: false,
+          [`${NAV_USUARIO}@odata.bind`]: `/${TABLE_USUARIO}(${usuarioGuid})`,
+          [`${NAV_MISSAO}@odata.bind`]: `/${TABLE_MISSAO}(${missaoGuid})`
+        });
+        existSet.add(chave);
+        criados++;
+      } catch (err) {
+        const msg = err?.message ?? String(err);
+        context.warn(`Erro ao sincronizar usuário ${usuarioGuid} missão ${missaoGuid}:`, msg);
+        if (erroDetalhes.length < 3) erroDetalhes.push({ usuarioGuid, missaoGuid, erro: msg });
+      }
+    }
+  }
+
+  return {
+    status: 200, headers: CORS, jsonBody: {
+      message: "Sincronização concluída.",
+      missoes: missoes.length,
+      usuarios: usuarios.length,
+      criados,
+      ignorados,
+      erros: erroDetalhes.length,
+      erroDetalhes: erroDetalhes.length > 0 ? erroDetalhes : undefined
     }
   };
 }

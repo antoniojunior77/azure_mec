@@ -19,8 +19,8 @@ const COL = {
   LK_CONQUISTA_VAL: "_eduxp_conquistaid_value"
 };
 
-const NAV_USUARIO   = "eduxp_UsuarioID";
-const NAV_CONQUISTA = "eduxp_ConquistaID";
+const NAV_USUARIO   = "eduxp_usuarioid";
+const NAV_CONQUISTA = "eduxp_conquistaid";
 
 const CORS = { "Access-Control-Allow-Origin": "*" };
 

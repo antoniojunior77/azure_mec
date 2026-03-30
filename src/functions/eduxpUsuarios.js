@@ -88,6 +88,7 @@ async function handleGet(request, context) {
     "eduxp_pontos",
     "eduxp_moedas",
     "eduxp_perfil",
+    "eduxp_fotoperfil",
     "_eduxp_fornecedorid_value"
   ].join(",");
 
@@ -176,6 +177,9 @@ async function handlePut(request, context) {
   }
   if (body.perfil !== undefined || body.eduxp_perfil !== undefined) {
     updateBody.eduxp_perfil = body.perfil ?? body.eduxp_perfil;
+  }
+  if (body.fotoPerfil !== undefined || body.eduxp_fotoperfil !== undefined) {
+    updateBody.eduxp_fotoperfil = (body.fotoPerfil ?? body.eduxp_fotoperfil) || null;
   }
   if (body.fornecedorId !== undefined) {
     const fId = normGuid(body.fornecedorId);

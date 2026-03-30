@@ -23,8 +23,8 @@ const COL = {
 };
 
 const NAV = {
-  USUARIO: "eduxp_UsuarioID",
-  TIPO: "eduxp_TipoAtividadeID"
+  USUARIO: "eduxp_usuarioid",
+  TIPO: "eduxp_tipoatividadeid"
 };
 
 const CORS = { "Access-Control-Allow-Origin": "*" };
