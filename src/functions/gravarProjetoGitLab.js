@@ -12,6 +12,14 @@ async function gitlabRequest(path, opts = {}) {
       ...(opts.headers || {}),
     },
   });
+  if (res.status === 401 || res.status === 403) {
+    const body = await res.text();
+    const err = new Error(`GitLab auth error (${res.status}): ${body}`);
+    err.authError = true;
+    err.statusCode = res.status;
+    err.detail = body;
+    throw err;
+  }
   return res;
 }
 
@@ -224,9 +232,10 @@ app.http('gravarProjetoGitLab', {
         }
       }
 
-      // PASSO 6: Buscar userId pelo email
-      context.log(`[GRAVAR] Passo 6: Buscando usuário "${email_responsavel}"`);
-      const usersRes = await gitlabRequest(`/users?search=${encodeURIComponent(email_responsavel)}`);
+      // PASSO 6: Buscar userId pelo username (extrai parte antes do @)
+      const username = email_responsavel.includes('@') ? email_responsavel.split('@')[0] : email_responsavel;
+      context.log(`[GRAVAR] Passo 6: Buscando usuário "${username}" (email: ${email_responsavel})`);
+      const usersRes = await gitlabRequest(`/users?username=${encodeURIComponent(username)}`);
       if (!usersRes.ok) throw { step: 'Busca de usuário no GitLab', gitlabError: await usersRes.text() };
       const users = await usersRes.json();
       let userId;
@@ -239,7 +248,7 @@ app.http('gravarProjetoGitLab', {
         context.log(`[GRAVAR] Usuário "${email_responsavel}" não encontrado. Usando fallback id=${SERVICE_ACCOUNT_ID}`);
       }
 
-      // PASSO 7: Adicionar owner ao projeto (idempotente — ignora se já é membro)
+      // PASSO 7: Adicionar owner ao projeto (não-fatal — projeto continua sem owner se falhar)
       context.log(`[GRAVAR] Passo 7: Adicionando owner userId=${userId}`);
       const memberRes = await gitlabRequest(`/projects/${projectId}/members`, {
         method: 'POST',
@@ -248,8 +257,12 @@ app.http('gravarProjetoGitLab', {
       if (!memberRes.ok) {
         const memberErr = await memberRes.text();
         const alreadyMember = memberErr.includes('already') || memberErr.includes('Member');
-        if (!alreadyMember) throw { step: 'Adição de owner ao projeto', gitlabError: memberErr };
-        context.log(`[GRAVAR] Usuário userId=${userId} já é membro — ignorando`);
+        if (alreadyMember) {
+          context.log(`[GRAVAR] Usuário userId=${userId} já é membro — ignorando`);
+        } else {
+          context.log(`[GRAVAR] AVISO: não foi possível adicionar owner userId=${userId}: ${memberErr}`);
+          usuarioNaoEncontrado = true;
+        }
       } else {
         context.log(`[GRAVAR] Owner adicionado: userId=${userId}`);
       }
@@ -257,7 +270,7 @@ app.http('gravarProjetoGitLab', {
       // PASSO 8: Registrar projeto na lista SharePoint Projects (idempotente — verifica se já existe)
       context.log('[GRAVAR] Passo 8: Registrando na lista Projects do SharePoint');
       const spCheckUrl = `https://graph.microsoft.com/v1.0/sites/${process.env.SHAREPOINT_SITE_ID}/lists/${process.env.SP_LIST_PROJECTS_ID}/items?$filter=fields/ID_PROJETO eq '${projectId}'&expand=fields`;
-      const spCheckRes = await fetch(spCheckUrl, { headers: { Authorization: `Bearer ${graphToken}` } });
+      const spCheckRes = await fetch(spCheckUrl, { headers: { Authorization: `Bearer ${graphToken}`, Prefer: 'HonorNonIndexedQueriesWarningMayFailRandomly' } });
       if (!spCheckRes.ok) throw { step: 'Verificação de projeto no SharePoint', gitlabError: await spCheckRes.text() };
       const spCheckData = await spCheckRes.json();
       if (spCheckData.value && spCheckData.value.length > 0) {
@@ -280,7 +293,7 @@ app.http('gravarProjetoGitLab', {
       // PASSO 9: Montar e retornar resposta final
       const responseBody = { projectId, projectUrl };
       if (usuarioNaoEncontrado) {
-        responseBody.aviso = `Projeto criado com sucesso, porém o usuário '${email_responsavel}' não foi encontrado no GitLab. A conta 'sharepoint-automation' foi adicionada como owner temporário.`;
+        responseBody.aviso = `Projeto criado com sucesso, porém não foi possível adicionar o usuário '${email_responsavel}' como owner. Verifique se o email existe no GitLab e adicione o owner manualmente.`;
       }
       context.log(`[GRAVAR] Concluído com sucesso: projectId=${projectId}`);
       return {
@@ -290,6 +303,19 @@ app.http('gravarProjetoGitLab', {
       };
 
     } catch (err) {
+      // Erro de autenticação GitLab — retorna 401 para o caller não ficar em retry loop
+      if (err.authError) {
+        context.log(`[GRAVAR] ERRO DE AUTENTICAÇÃO GitLab (${err.statusCode}): ${err.detail}`);
+        return {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          jsonBody: {
+            error: 'Token GitLab inválido ou revogado. Gere um novo token e atualize a variável GITLAB_TOKEN.',
+            mensagem_usuario: 'Falha de autenticação no GitLab. Não tente novamente — o token precisa ser renovado.',
+          },
+        };
+      }
+
       const step = err.step || 'desconhecida';
       const gitlabError = err.gitlabError || err.message || String(err);
       context.log(`[GRAVAR] ERRO na etapa "${step}": ${gitlabError}`);
