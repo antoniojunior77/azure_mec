@@ -10,12 +10,19 @@ const {
   BlobSASPermissions,
 } = require("@azure/storage-blob");
 const { Readable } = require("stream");
-const { listRecords, updateRecord } = require("../shared/dataverseCrud");
+const { listRecords, updateRecord, createRecord, getRecordById } = require("../shared/dataverseCrud");
 
-const TABLE_USUARIO   = "eduxp_usuarios";
-const COL_FOTO        = "eduxp_fotoperfil";
-const COL_USUARIO_ID  = "eduxp_usuarioid";
-const COL_EMAIL       = "eduxp_email";
+const TABLE_USUARIO        = "eduxp_usuarios";
+const TABLE_ATIVIDADE      = "eduxp_atividades";
+const TABLE_TIPO_ATIVIDADE = "eduxp_tipoatividades";
+const COL_FOTO             = "eduxp_fotoperfil";
+const COL_USUARIO_ID       = "eduxp_usuarioid";
+const COL_EMAIL            = "eduxp_email";
+
+// XP e moedas concedidos por atualizar a foto de perfil
+const FOTO_XP     = Number(process.env.FOTO_XP     || 10);
+const FOTO_MOEDAS = Number(process.env.FOTO_MOEDAS || 5);
+const TIPO_ATIVIDADE_FOTO = "AtualizacaoFoto";
 
 const CONTAINER_NAME  = process.env.BLOB_CONTAINER || "app-package-pnld-4ff16a8";
 const SAS_HOURS       = Number(process.env.SAS_HOURS || 12);
@@ -165,6 +172,67 @@ async function findUserByEmailOrId(email, usuarioId) {
   return null;
 }
 
+// ─── Gamificação helpers ──────────────────────────────────────────────────────
+
+async function getTipoAtividadeId(nome) {
+  const r = await listRecords(TABLE_TIPO_ATIVIDADE, {
+    select: "eduxp_tipoatividadeid,eduxp_nome", top: 5000
+  });
+  const found = (r?.value || []).find(
+    x => String(x.eduxp_nome || "").trim().toLowerCase() === nome.toLowerCase()
+  );
+  if (found?.eduxp_tipoatividadeid) return found.eduxp_tipoatividadeid;
+  // cria o tipo se não existir
+  try {
+    const created = await createRecord(TABLE_TIPO_ATIVIDADE, { eduxp_nome: nome }, {
+      idField: "eduxp_tipoatividadeid", returnRepresentation: true
+    });
+    return created?.id || null;
+  } catch { return null; }
+}
+
+async function creditarFoto(userId, context) {
+  try {
+    // Verifica se já ganhou ponto por foto hoje (token de deduplicação)
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const token = `FOTO:${userId}:${today}`;
+    const jaReg = await listRecords(TABLE_ATIVIDADE, {
+      select: "eduxp_atividadeid",
+      filter: `eduxp_token eq '${token}'`,
+      top: 1
+    });
+    if (jaReg?.value?.length > 0) return; // já creditado hoje
+
+    // Credita XP e moedas
+    const user = await getRecordById(TABLE_USUARIO, userId, {
+      select: "eduxp_usuarioid,eduxp_pontos,eduxp_moedas"
+    });
+    if (!user) return;
+    const novosPontos = Number(user.eduxp_pontos || 0) + FOTO_XP;
+    const novasMoedas = Number(user.eduxp_moedas || 0) + FOTO_MOEDAS;
+    await updateRecord(TABLE_USUARIO, userId, {
+      eduxp_pontos: novosPontos,
+      eduxp_moedas: novasMoedas
+    });
+
+    // Cria registro de atividade
+    const tipoId = await getTipoAtividadeId(TIPO_ATIVIDADE_FOTO);
+    if (tipoId) {
+      await createRecord(TABLE_ATIVIDADE, {
+        eduxp_descricao: `Foto de perfil atualizada (+${FOTO_XP} XP, +${FOTO_MOEDAS} moedas)`,
+        eduxp_xpganho: FOTO_XP,
+        eduxp_pontosganhos: FOTO_MOEDAS,
+        eduxp_dataatividade: new Date().toISOString(),
+        eduxp_token: token,
+        [`eduxp_usuarioid@odata.bind`]: `/${TABLE_USUARIO}(${userId})`,
+        [`eduxp_tipoatividadeid@odata.bind`]: `/${TABLE_TIPO_ATIVIDADE}(${tipoId})`
+      });
+    }
+  } catch (err) {
+    context.warn("Falha ao creditar pontos por foto:", err?.message);
+  }
+}
+
 // ─── Route handler ────────────────────────────────────────────────────────────
 
 app.http("eduxp-usercontext", {
@@ -260,6 +328,9 @@ async function handlePut(request, context) {
 
   const permanentUrl = buildPermanentUrl(accountName, blobName);
   await updateRecord(TABLE_USUARIO, userId, { [COL_FOTO]: permanentUrl });
+
+  // Credita XP/moedas por atualizar a foto (1x por dia)
+  await creditarFoto(userId, context);
 
   const sasUrl = buildSasUrl(accountName, sharedKey, blobName);
   return { status: 200, headers: CORS, jsonBody: { message: "Foto atualizada com sucesso.", url: sasUrl } };

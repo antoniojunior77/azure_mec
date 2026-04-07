@@ -35,3 +35,6 @@ require("./functions/eduxpProjetosUsuario");
 require("./functions/eduxpTransacaoMoedas");
 require("./functions/eduxpPerformance");
 require("./functions/eduxpUserContext");
+require("./functions/eduxpFotos");
+require("./functions/eduxpSyncProjetos");
+require("./functions/eduxpFornecedorDashboard");
