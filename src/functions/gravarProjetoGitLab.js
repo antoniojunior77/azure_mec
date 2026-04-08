@@ -197,14 +197,24 @@ app.http('gravarProjetoGitLab', {
       const boardsRes = await gitlabRequest(`/projects/${projectId}/boards`);
       if (!boardsRes.ok) throw { step: 'Obtenção do board padrão', gitlabError: await boardsRes.text() };
       const gitlabBoards = await boardsRes.json();
-      const boardId = gitlabBoards && gitlabBoards.length > 0 ? gitlabBoards[0].id : null;
-      context.log(boardId ? `[GRAVAR] Board padrão: id=${boardId}` : '[GRAVAR] Nenhum board encontrado — pulando configuração de colunas');
-
-      // PASSO 5: Criar colunas no board (idempotente — pula se não há board)
-      context.log('[GRAVAR] Passo 5: Criando colunas no board');
+      let boardId = gitlabBoards && gitlabBoards.length > 0 ? gitlabBoards[0].id : null;
       if (!boardId) {
-        context.log('[GRAVAR] Passo 5: sem board disponível — ignorando colunas');
+        context.log('[GRAVAR] Nenhum board encontrado — criando board padrão');
+        const createBoardRes = await gitlabRequest(`/projects/${projectId}/boards`, {
+          method: 'POST',
+          body: JSON.stringify({ name: 'Board' }),
+        });
+        if (!createBoardRes.ok) throw { step: 'Criação do board padrão', gitlabError: await createBoardRes.text() };
+        const newBoard = await createBoardRes.json();
+        boardId = newBoard.id;
+        context.log(`[GRAVAR] Board criado: id=${boardId}`);
       } else {
+        context.log(`[GRAVAR] Board padrão: id=${boardId}`);
+      }
+
+      // PASSO 5: Criar colunas no board
+      context.log('[GRAVAR] Passo 5: Criando colunas no board');
+      {
         const existingListsRes = await gitlabRequest(`/projects/${projectId}/boards/${boardId}/lists`);
         if (!existingListsRes.ok) throw { step: 'Busca de colunas existentes no board', gitlabError: await existingListsRes.text() };
         const existingLists = await existingListsRes.json();
