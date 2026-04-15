@@ -173,6 +173,24 @@ app.http('gravarProjetoGitLab', {
       ]);
       context.log(`[GRAVAR] SharePoint: ${spLabels.length} labels, ${spBoards.length} boards`);
 
+      // Resolver email_responsavel → SharePoint LookupId via User Information List
+      let responsavelLookupId = null;
+      const uilUrl = `https://graph.microsoft.com/v1.0/sites/${process.env.SHAREPOINT_SITE_ID}/lists/User%20Information%20List/items?$filter=fields/EMail eq '${email_responsavel}'&$expand=fields&$top=1`;
+      const uilRes = await fetch(uilUrl, {
+        headers: { Authorization: `Bearer ${graphToken}` },
+      });
+      if (uilRes.ok) {
+        const uilData = await uilRes.json();
+        if (uilData.value && uilData.value.length > 0) {
+          responsavelLookupId = Number(uilData.value[0].id);
+          context.log(`[GRAVAR] Responsável "${email_responsavel}" → LookupId=${responsavelLookupId}`);
+        } else {
+          context.log(`[GRAVAR] AVISO: "${email_responsavel}" não encontrado no SharePoint — campo Equipe não será preenchido`);
+        }
+      } else {
+        context.log(`[GRAVAR] AVISO: erro ao consultar User Information List (${uilRes.status}) — campo Equipe não será preenchido`);
+      }
+
       // PASSO 3: Criar labels no GitLab (idempotente — busca existentes para montar o mapa)
       context.log(`[GRAVAR] Passo 3: Criando ${spLabels.length} labels no GitLab`);
       const existingLabelsRes = await gitlabRequest(`/projects/${projectId}/labels?per_page=100`);
@@ -311,6 +329,7 @@ app.http('gravarProjetoGitLab', {
                 url: projectUrl,
                 token: process.env.GITLAB_TOKEN,
                 ...(squad_id ? { SquadLookupId: String(squad_id) } : {}),
+                ...(responsavelLookupId ? { 'EquipeLookupId@odata.type': 'Collection(Edm.Int32)', EquipeLookupId: [responsavelLookupId] } : {}),
               },
             }),
           }
