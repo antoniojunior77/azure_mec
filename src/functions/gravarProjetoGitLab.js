@@ -104,15 +104,24 @@ app.http('gravarProjetoGitLab', {
       };
     }
 
-    const { name, path, namespace_id, description, visibility, initialize_with_readme, email_responsavel } = body;
+    const { name, path: rawPath, namespace_id, description, visibility, initialize_with_readme, email_responsavel, squad_id } = body;
 
-    if (!name || !path || !namespace_id || !email_responsavel) {
+    if (!name || !rawPath || !namespace_id || !email_responsavel) {
       return {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         jsonBody: { error: 'Campos obrigatórios: name, path, namespace_id, email_responsavel.' },
       };
     }
+
+    // Sanitiza o path: remove acentos, substitui espaços e caracteres inválidos
+    const path = rawPath
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove acentos
+      .replace(/\s+/g, '-')                              // espaços → hífens
+      .replace(/[^a-zA-Z0-9_\-\.]/g, '')                 // remove caracteres inválidos
+      .replace(/^[-_.]+/, '')                             // não pode começar com - _ .
+      .replace(/[-_.]+$/, '');                            // não pode terminar com - _ .
+    context.log(`[GRAVAR] Path sanitizado: "${rawPath}" → "${path}"`);
 
     let projectId = null;
     let projectUrl = null;
@@ -220,25 +229,29 @@ app.http('gravarProjetoGitLab', {
         const existingLists = await existingListsRes.json();
         const existingListLabelIds = new Set(existingLists.map(l => l.label?.id).filter(Boolean));
 
-        const boardLabels = spLabels.filter(item => item.fields.ColunaBoard === 'Sim');
-        context.log(`[GRAVAR] ${boardLabels.length} labels marcadas como coluna de board`);
-        for (const item of boardLabels) {
-          const gitlabLabelId = spLabelIdToGitlabId[item.id];
-          if (existingListLabelIds.has(gitlabLabelId)) {
-            context.log(`[GRAVAR] Coluna já existe: "${item.fields.Title}" — ignorando`);
+        context.log(`[GRAVAR] ${spBoards.length} boards definidos no SharePoint`);
+        const sortedBoards = [...spBoards].sort((a, b) => Number(a.fields.Posicao || 0) - Number(b.fields.Posicao || 0));
+        for (const boardEntry of sortedBoards) {
+          const spLabelId = String(boardEntry.fields.ID_LABEL);
+          const gitlabLabelId = spLabelIdToGitlabId[spLabelId];
+          if (!gitlabLabelId) {
+            context.log(`[GRAVAR] Board com ID_LABEL=${spLabelId} não tem label correspondente — ignorando`);
             continue;
           }
-          const boardEntry = spBoards.find(b => String(b.fields.ID_LABEL) === String(item.id));
-          const posicao = boardEntry ? Number(boardEntry.fields.Posicao) : 0;
+          if (existingListLabelIds.has(gitlabLabelId)) {
+            context.log(`[GRAVAR] Coluna já existe para labelId=${gitlabLabelId} — ignorando`);
+            continue;
+          }
+          const posicao = Number(boardEntry.fields.Posicao || 0);
           const listRes = await gitlabRequest(`/projects/${projectId}/boards/${boardId}/lists`, {
             method: 'POST',
             body: JSON.stringify({ label_id: gitlabLabelId, position: posicao }),
           });
           if (!listRes.ok) {
             const err = await listRes.text();
-            throw { step: `Criação da coluna "${item.fields.Title}"`, gitlabError: err };
+            throw { step: `Criação da coluna (labelId=${gitlabLabelId})`, gitlabError: err };
           }
-          context.log(`[GRAVAR] Coluna criada: "${item.fields.Title}" posição=${posicao}`);
+          context.log(`[GRAVAR] Coluna criada: labelId=${gitlabLabelId} posição=${posicao}`);
         }
       }
 
@@ -292,7 +305,13 @@ app.http('gravarProjetoGitLab', {
             method: 'POST',
             headers: { Authorization: `Bearer ${graphToken}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              fields: { Title: name, ID_PROJETO: String(projectId), url: projectUrl, token: process.env.GITLAB_TOKEN },
+              fields: {
+                Title: name,
+                ID_PROJETO: String(projectId),
+                url: projectUrl,
+                token: process.env.GITLAB_TOKEN,
+                ...(squad_id ? { SquadLookupId: String(squad_id) } : {}),
+              },
             }),
           }
         );
